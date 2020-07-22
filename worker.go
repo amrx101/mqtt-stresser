@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"time"
@@ -51,18 +52,34 @@ func setSkipTLS(o *mqtt.ClientOptions) {
 
 func NewTLSConfig(ca, certificate, privkey []byte) (*tls.Config, error) {
 	// Import trusted certificates from CA
-	certpool := x509.NewCertPool()
-	ok := certpool.AppendCertsFromPEM(ca)
-
-	if !ok {
-		return nil, fmt.Errorf("CA is invalid")
+	caPem, _ := pem.Decode(ca)
+	caCert, err := x509.ParseCertificate(caPem.Bytes)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
+	// CA v3 extensions missing. Wont verify server certs as
+	// crypto module doesnt know
+	caCert.BasicConstraintsValid = true
+	caCert.IsCA = true
+	caCert.KeyUsage = x509.KeyUsageCertSign
+
+	certpool := x509.NewCertPool()
+	certpool.AddCert(caCert)
+
+	// certpool := x509.NewCertPool()
+	// ok := certpool.AppendCertsFromPEM(ca)
+
+	// if !ok {
+	// 	return nil, fmt.Errorf("CA is invalid")
+	// }
 
 	// Import client certificate/key pair
 	cert, err := tls.X509KeyPair(certificate, privkey)
 	if err != nil {
 		return nil, err
 	}
+	fmt.Println("Cert loaded")
 
 	// Create tls.Config with desired tls properties
 	return &tls.Config{
@@ -129,6 +146,7 @@ func (w *Worker) Run(ctx context.Context) {
 	subscriber := mqtt.NewClient(subscriberOptions)
 
 	verboseLogger.Printf("[%d] connecting publisher\n", w.WorkerId)
+	verboseLogger.Printf("%d timeout -> \n", w.Timeout)
 	if token := publisher.Connect(); token.WaitTimeout(w.Timeout) && token.Error() != nil {
 		resultChan <- Result{
 			WorkerId:     w.WorkerId,
@@ -138,6 +156,7 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 		return
 	}
+	verboseLogger.Printf("Connected Publisher")
 
 	verboseLogger.Printf("[%d] connecting subscriber\n", w.WorkerId)
 	if token := subscriber.Connect(); token.WaitTimeout(w.Timeout) && token.Error() != nil {
